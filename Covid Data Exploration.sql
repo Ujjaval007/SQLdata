@@ -1,5 +1,8 @@
 -- Covid19 Data Exploration
 
+--- Skills used: Joins, CTE's, Temp Tables, Windows Functions, Aggregate Functions, Creating Views, Converting Data Types
+
+
 -- Pull  related data from covid death table
 Select Location, date, total_cases, new_cases, total_deaths, population
 From CovidProj..CovidDeaths

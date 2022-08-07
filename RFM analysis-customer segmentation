@@ -1,0 +1,167 @@
+#Use database RFM
+create database rfm1;
+use rfm1;
+
+# Create table named onlineretails
+CREATE TABLE onlineretails (
+    InvoiceNo INT,
+    StockCode VARCHAR(20),
+    Description VARCHAR(200),
+    Quantity NUMERIC,
+    InvoiceDate datetime,
+    UnitPrice NUMERIC,
+    CustomerID NUMERIC,
+    Country VARCHAR(40)
+);
+
+#load csv to sql
+load data local infile "E:\Online Retail.csv" into table onlineretails
+fields terminated by ','  lines terminated by "\r\n" ignore 1 lines
+(InvoiceNo,StockCode,Description,Quantity,@tmp_date,UnitPrice,CustomerID,Country)
+# SET the InvoiceDate for easy loading of csv file
+set InvoiceDate = str_to_date(@tmp_date,'%Y-%m-%d');
+
+#display results
+select * from onlineretails;
+
+#Find Distinct count value in rows
+#we have 541909 rows
+select count(*) from onlineretails;
+
+# Create a table to store non duplicate data 
+create table sales_facts like onlineretails;
+insert into sales_facts select distinct * from onlineretails; 
+
+#display sales_facts
+select * from sales_facts;
+select count(*) from sales_facts;
+
+## Missing value processing
+# Find count of each column value and you will get the column with missing values
+
+SELECT count(InvoiceNo),count(StockCode),count(Quantity)
+,count(InvoiceDate),count(UnitPrice),count(CustomerID),count(Country),count(Description)
+FROM sales_facts;
+
+
+#Find the minimum value and maximum value of each column if its negative it should be deleted
+SELECT MAX(UnitPrice)AS' The highest price ',MIN(UnitPrice)AS' The lowest price ',MAX(Quantity)AS' Highest sales ',MIN(Quantity)AS' Minimum sales '
+FROM sales_facts;
+
+#It is obvious that there are outliers in sales volume and price .
+#Now lets fix that
+# before doing so set SQL_SAFE_UPDATES=0 for easy alternation of the table
+select * from sales_facts where Quantity<=0;
+SET SQL_SAFE_UPDATES = 0;
+
+#Delete value with quantity less than or equal to 0
+delete from sales_facts where  Quantity<=0;
+
+# Check that the price is 0 The data of 
+select * from sales_facts where UnitPrice=0;
+
+# Delete rows where UnitPrice is less than or equal to 0 as its not of significance
+delete from sales_facts where UnitPrice=0;
+select * from sales_facts where UnitPrice<0;
+delete from sales_facts where UnitPrice<0;
+
+#Drop column order_date if exist
+
+
+#Add column order_date and copy contents of column Invoicedate and put it format '%Y-%m-%d %H:%i:%s' 
+ALTER table sales_facts add column order_date varchar(255) not null; 
+UPDATE sales_facts set order_date=str_to_date(Invoicedate,'%Y-%m-%d %H:%i:%s');
+UPDATE sales_facts set order_date=DATE_FORMAT(order_date, '%Y-%m-%d');
+
+select * from sales_facts;
+##RFM Scores
+
+#The model needs to know the last consumption time of each customer （ Here we use 2011/12/09 For reference time ）, 
+#Consumption frequency and total transaction amount within the time frame .
+#the code is given in slide of project undertand it and make your own interpretation 
+CREATE  TABLE RFM AS 
+select CustomerID,InvoiceNo,Country,datediff('2011-12-09',MAX(order_date))as  Last_time_interval ,
+count(distinct InvoiceNo)as Number_of_transactions ,
+sum(Quantity*UnitPrice)as Transaction_amount
+from sales_facts 
+group by CustomerID 
+order by  Last_time_interval  desc, Transaction_amount  desc ,Number_of_transactions  desc; 
+
+select * from RFM;
+
+
+#Create a table RFM with R-score
+select a.The_days_are_different ,count(CustomerID) as The_number_of
+from 
+(select distinct CustomerID,datediff('2011-12-09',MAX(ORDER_date))as The_days_are_different,count(distinct CustomerID)
+from sales_facts
+GROUP BY CustomerID) a
+GROUP BY a.The_days_are_different 
+order by a.The_days_are_different ;
+
+#Find out F-score
+# This code uses from Create a new table later a,as Omit 
+select a. Number_of_transactions ,count(CustomerID) as ' The number of '
+from 
+(select  CustomerID,count(distinct InvoiceNo) Number_of_transactions
+from sales_facts
+GROUP BY CustomerID) a
+GROUP BY a. Number_of_transactions  
+order by a. Number_of_transactions ;
+
+#Find out M-score
+SELECT CustomerID,SUM(Quantity*UnitPrice) as  Consumption_amount 
+FROM sales_facts
+GROUP BY CustomerID;
+
+#drop table RFM_score if alreay exist
+
+
+# Create a  table to store RFM_score and combine the scores
+# and also give range if values in RFM Score coulmn with 1,2,3,4,5 for different range of values
+CREATE TABLE RFM_score  AS 
+select *,
+(case when  Last_time_interval  <=30 then 5
+when Last_time_interval  >30 and  Last_time_interval  <=90 then 4 
+when  Last_time_interval  >90 and  Last_time_interval <=180 then 3  
+when  Last_time_interval  >180 and  Last_time_interval <=270 then 2 else 1 END) AS 'R_score' ,
+(case when  Number_of_transactions <=1 then 1
+when   Number_of_transactions  >1 and  Number_of_transactions  <=3 then 2 
+when  Number_of_transactions >3 and  Number_of_transactions <=5 then 3 
+when  Number_of_transactions >5 and  Number_of_transactions <=8 then 4 else 5 END) AS 'F_score' ,
+(case when  Transaction_amount <=1000 then 1
+when   Transaction_amount  >1000 and Transaction_amount  <=2000 then 2 
+when  Transaction_amount >2000 and  Transaction_amount <=4000 then 3  
+when  Transaction_amount >4000 and  Transaction_amount <=8000 then 4 else 5 END) AS 'M_score' 
+from RFM;
+
+select * from RFM_score;
+
+# Calculate average of final RFM Score for threshold of determining RFM Values
+select ROUND(avg(R_score ),1)as 'R_Average ',ROUND(avg(F_score ),1)as 'F_Average ',ROUND(avg(M_score ),1)as 'M_Average '
+from RFM_score ;
+
+# Create a table RFM_value 
+CREATE  TABLE RFM_value  AS 
+select *,case when R_score >3.8 then 1 else 0 end as R_value ,
+case when F_score >2.3 then 1 else 0 end as F_value ,
+case when M_score >1.7 then 1 else 0 end as M_value 
+from RFM_score ;
+
+select * from RFM_value ; 
+
+# Create a table named Customer classification  , Classify all customers as per categories given the side table 1.5 
+CREATE TABLE  Customer_classification  AS
+select CustomerID,InvoiceNo,Country,
+case when R_value =1 and F_value =1 and M_value =1 then ' Important value customers '
+     when R_value =0 and F_value =1 and M_value =1 then ' Key development customers '
+     when R_value =1 and F_value =0 and M_value =1 then ' Important customer retention '      
+     when R_value =0 and F_value =0 and M_value =1 then ' Important retention customers '
+     when R_value =1 and F_value =1 and M_value =0 then ' General value customers '
+     when R_value =1 and F_value =0 and M_value =0 then ' General development clients '
+     when R_value =0 and F_value =1 and M_value =0 then ' Generally keep customers '
+ else ' Generally, keep customers ' end as Customer_category 
+from RFM_value ;
+
+#  View customer classification table 
+select * from  Customer_classification ;
